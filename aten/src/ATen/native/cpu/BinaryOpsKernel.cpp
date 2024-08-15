@@ -1230,7 +1230,7 @@ void xlogy_kernel(TensorIteratorBase& iter) {
           if (x == 0) {
             return 0;
           }
-          return x * std::log(y);
+          return x * ::log(y);
         });
       });
 }
