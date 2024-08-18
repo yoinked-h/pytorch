@@ -772,7 +772,7 @@ class CondHigherOrderVariable(TorchHigherOrderOperatorVariable):
             true_graph,
             false_graph,
             true_shared,
-            false_shared,
+            _,
             unique_true,
             unique_false,
         ) = _merge_graph_inputs(
@@ -907,7 +907,7 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
         additional_inputs = args[3].unpack_var_sequence(tx)
 
         (
-            (cond_r, cond_treespec),
+            (cond_r, _),
             cond_graph,
             cond_lifted_freevars,
         ) = speculate_subgraph(
@@ -953,7 +953,7 @@ class WhileLoopHigherOrderVariable(TorchHigherOrderOperatorVariable):
             cond_graph,
             body_graph,
             cond_shared,
-            body_shared,
+            _,
             cond_unique,
             body_unique,
         ) = _merge_graph_inputs(
@@ -1059,7 +1059,7 @@ class AssociativeScanHigherOrderVariable(TorchHigherOrderOperatorVariable):
             for leaf in itertools.chain(xs.items, xs.items)
         ]
         (
-            (combine_result, combine_treespec),
+            (combine_result, _),
             combine_graph,
             combine_lifted_freevars,
         ) = speculate_subgraph(
@@ -1551,7 +1551,7 @@ class WrapHigherOrderVariable(TorchHigherOrderOperatorVariable):
         kwargs: "Dict[str, VariableTracker]",
     ) -> "VariableTracker":
         # This flattens the kwargs into lifted args
-        p_args, p_kwargs, example_value, body_r, treespec, _ = self.create_wrapped_node(
+        p_args, p_kwargs, _, body_r, treespec, _ = self.create_wrapped_node(
             tx, args, kwargs, "wrap"
         )
 
@@ -1761,8 +1761,6 @@ class StrictModeHigherOrderVariable(TorchHigherOrderOperatorVariable):
         args: "List[VariableTracker]",
         kwargs: "Dict[str, VariableTracker]",
     ) -> "VariableTracker":
-        callable = args[0]
-
         unpacked_sequence = args[1].unpack_var_sequence(tx)
         # TODO (tmanlaibaatar) support pytree here
         for arg in unpacked_sequence:
@@ -1852,7 +1850,7 @@ class CheckpointHigherOrderVariable(WrapHigherOrderVariable):
             p_args,
             _,
             example_value,
-            body_r,
+            _,
             treespec,
             checkpointed_gmod,
         ) = self.create_wrapped_node(
@@ -2021,7 +2019,7 @@ class FlexAttentionHigherOrderVariable(TorchHigherOrderOperatorVariable):
 
         with TransformGetItemToIndex():
             (
-                (body_output, body_treespec),
+                _,
                 body_graph,
                 body_lifted_freevars,
             ) = speculate_subgraph(
@@ -2188,7 +2186,6 @@ class AutogradFunctionApplyVariable(VariableTracker):
             source_target="autograd.Function",
         )
 
-        fwd_src = AttrSource(self.parent_source, member="forward")
         ctx = AutogradFunctionContextVariable.create(tx, args, kwargs)
         if isinstance(self.fwd_graph, types.FunctionType):
             fwd_fn = UserFunctionVariable(self.fwd_graph)
@@ -2428,13 +2425,10 @@ def maybe_positional_arg_names(func):
     if not hasattr(func, "get_function"):
         return None
     try:
-        fn = func.get_function()
-    except (Unsupported, NotImplementedError):
-        return None
-    try:
         sig = inspect.signature(func.get_function())
-    except ValueError:
+    except (Unsupported, NotImplementedError, ValueError):
         return None
+
     for name, param in sig.parameters.items():
         if param.kind is inspect.Parameter.VAR_POSITIONAL:
             return None

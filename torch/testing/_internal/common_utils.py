@@ -2216,7 +2216,7 @@ def is_iterable_of_tensors(iterable, include_empty=False):
             if not isinstance(t, torch.Tensor):
                 return False
 
-    except TypeError as te:
+    except TypeError:
         return False
 
     return True
@@ -2325,7 +2325,7 @@ class CudaMemoryLeakCheck:
             discrepancy_detected = True
 
             # Query memory multiple items to ensure leak was not transient
-            for n in range(3):
+            for _ in range(3):
                 caching_allocator_mem_allocated = torch.cuda.memory_allocated(i)
                 bytes_free, bytes_total = torch.cuda.mem_get_info(i)
                 driver_mem_allocated = bytes_total - bytes_free
@@ -3815,6 +3815,7 @@ class TestCase(expecttest.TestCase):
             exact_is_coalesced=False
     ):
         # Hide this function from `pytest`'s traceback
+        # pylint: disable-next=unused-variable
         __tracebackhide__ = True
 
         # numpy's dtypes are a superset of what PyTorch supports. In case we encounter an unsupported dtype, we fall
@@ -4216,7 +4217,7 @@ class TestCase(expecttest.TestCase):
         # CI flag should be set in the parent process only.
         env.pop("CI", None)
         env.pop("TEST_SHOWLOCALS", None)
-        (stdout, stderr) = TestCase.run_process_no_exception(code, env=env)
+        _, stderr = TestCase.run_process_no_exception(code, env=env)
         return stderr.decode('ascii')
 
 
