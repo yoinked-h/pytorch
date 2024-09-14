@@ -415,6 +415,17 @@ class UserDefinedClassVariable(UserDefinedVariable):
         ):
             # import here to avoid an unfortunate circular dependency.
             from .ctx_manager import GenericContextWrappingVariable
+            from .functions import GeneratorFunctionVariable, UserFunctionVariable
+
+            if self.value is contextlib._GeneratorContextManager:
+                # Replace UserFunctionVariable by GeneratorFunction if the function
+                # was annotated with @contextlib.contextmanager
+                # This shouldn't be necessary once generator functions is fully
+                # supported in dynamo
+                assert isinstance(args[0], UserFunctionVariable)
+                args[0] = GeneratorFunctionVariable(
+                    args[0].get_function(), source=self.source
+                )
 
             cm_obj = tx.output.side_effects.track_object_new(
                 self.source, self.value, GenericContextWrappingVariable, {}
