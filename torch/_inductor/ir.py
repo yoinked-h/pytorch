@@ -6684,6 +6684,137 @@ class WhileLoop(ExternKernel):
         wrapper.codegen_while_loop(self)
 
 
+class SequentialScan(ExternKernel):
+    combine_subgraph: Optional[Subgraph] = None
+    init: Optional[List[TensorBox]] = None
+    xs: Optional[List[TensorBox]] = None
+    dim: int = 0
+    reverse: bool = False
+    additional_inputs: Optional[List[TensorBox]] = None
+    outputs: Optional[List[MultiOutput]] = None
+
+    def __init__(
+        self,
+        combine_subgraph: Subgraph,
+        init: List[TensorBox],
+        xs: List[TensorBox],
+        dim: int,
+        reverse: bool,
+        additional_inputs: List[TensorBox],
+        layout: MultiOutputLayout,
+    ):
+        self.combine_subgraph = combine_subgraph
+        self.init = init
+        self.xs = xs
+        self.dim = dim
+        self.reverse = reverse
+        self.additional_inputs = additional_inputs
+
+        super().__init__(
+            name=None,
+            layout=layout,  # type: ignore[arg-type]
+            inputs=init + xs + additional_inputs,  # type: ignore[list-item]
+        )
+
+        self.name = V.graph.register_buffer(self)
+        V.graph.register_operation(self)
+
+    @classmethod
+    def create(
+        cls,
+        combine_subgraph: Subgraph,
+        init: List[TensorBox],
+        xs: List[TensorBox],
+        dim: int,
+        reverse: bool,
+        additional_inputs: List[TensorBox],
+    ):
+        from torch._higher_order_ops.scan import _extract_carry_and_out
+
+        num_init_leaves = len(init)
+        init = [cls.realize_input(x) for x in init]
+        xs = [cls.realize_input(x) for x in xs]
+        scan_length = xs[0].get_size()[dim]
+        additional_inputs = [cls.realize_input(x) for x in additional_inputs]
+        all_inputs = init + xs + additional_inputs
+
+        carry, ys = _extract_carry_and_out(combine_subgraph.graph.graph_outputs, num_init_leaves)  # type: ignore[union-attr]
+
+        if _has_aliased_buffers(carry + ys):
+            raise AssertionError(
+                f"Output aliasing is currently not supported in compiled torch.scan. "
+                f"The outputs of the combine_fn subgraph of torch.scan are aliased: {combine_subgraph.graph.graph_outputs}"  # type: ignore[union-attr]
+            )
+        device = all_inputs[0].get_device()
+
+        # make sure init and outputs are structurally equivalent
+        assert len(carry) == num_init_leaves, (init, carry)
+        for i, (ini, c) in enumerate(zip(init, carry)):
+            assert ini.get_size() == c.get_size(), (i, ini, c, dim)
+            # assume all init and outputs are on the same device
+            # as the MultiOutputLayout below requires single device
+            assert ini.get_device() == c.get_device() == device, (i, ini, c, device)
+            assert ini.get_dtype() == c.get_dtype(), (i, ini, c)
+
+        sequential_scan = SequentialScan(
+            combine_subgraph=combine_subgraph,
+            init=init,
+            xs=xs,
+            dim=dim,
+            reverse=reverse,
+            additional_inputs=additional_inputs,
+            layout=MultiOutputLayout(device),
+        )
+
+        # last_carry should have the same shape and stride as init
+        last_carry_output = [
+            MultiOutput(
+                FixedLayout(
+                    device=ini.get_device(),
+                    dtype=ini.get_dtype(),
+                    size=ini.get_size(),
+                    stride=ini.get_stride(),
+                ),
+                sequential_scan,
+                [(list, i)],
+            )
+            for i, ini in enumerate(init)
+        ]
+
+        def stacked_size_stride(y):
+            sizes = [scan_length, *y.get_size()]
+            # TODO: this is a hacky way to get the stride of the stacked output
+            # Semantic-wise this is correct because scan will torch.stack the intermediates, so
+            # torch.stack will force the output become contingous.
+            strides = [1]
+            for i, sz in enumerate(reversed(sizes[1:])):
+                strides.append(sz * strides[-1])
+            return sizes, list(reversed(strides))
+
+        stacked_y_size_stride = [stacked_size_stride(y) for y in ys]
+
+        stacked_output = [
+            MultiOutput(
+                FixedLayout(
+                    device=y.get_device(),
+                    dtype=y.get_dtype(),
+                    size=stacked_y_size_stride[i][0],
+                    stride=stacked_y_size_stride[i][1],
+                ),
+                sequential_scan,
+                [(list, i + num_init_leaves)],
+            )
+            for i, y in enumerate(ys)
+        ]
+
+        outputs = [*last_carry_output, *stacked_output]
+        sequential_scan.outputs = outputs
+        return outputs
+
+    def codegen(self, wrapper):
+        wrapper.codegen_sequential_scan(self)
+
+
 class EffectfulKernel(FallbackKernel):
     def __init__(
         self,
