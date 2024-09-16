@@ -300,19 +300,18 @@ kernel void upsample_bicubic2d(
     constant ulong4& output_strides [[buffer(3)]],
     constant long4& input_sizes [[buffer(4)]],
     constant long4& output_sizes [[buffer(5)]],
-    constant bool& align_corners [[buffer(6)]],
+    constant float2& scales [[buffer(6)]],
+    constant bool& align_corners [[buffer(7)]],
     uint thread_index [[thread_position_in_grid]]) {
-  float width_scale = input_sizes.x * 1.0 / output_sizes.x;
-  float height_scale = input_sizes.y * 1.0 / output_sizes.y;
   auto output_x = thread_index % output_sizes.x;
   auto output_y = thread_index / output_sizes.x;
   auto real_x = area_pixel_compute_source_index(
-      width_scale, output_x, align_corners, /*cubic=*/true);
+      scales.x, output_x, align_corners, /*cubic=*/true);
   int in_x = floor(real_x);
   auto t_x = real_x - in_x;
 
   auto real_y = area_pixel_compute_source_index(
-      height_scale, output_y, align_corners, /*cubic=*/true);
+      scales.y, output_y, align_corners, /*cubic=*/true);
   int in_y = floor(real_y);
   auto t_y = real_y - in_y;
   for (int n = 0; n < output_sizes.w; n++) {
@@ -374,11 +373,38 @@ kernel void upsample_bicubic2d(
       constant ulong4 & output_strides [[buffer(3)]],              \
       constant long4 & input_sizes [[buffer(4)]],                  \
       constant long4 & output_sizes [[buffer(5)]],                 \
-      constant bool& align_corners [[buffer(6)]],                  \
+      constant float2& scales [[buffer(6)]],                       \
+      constant bool& align_corners [[buffer(7)]],                  \
       uint thread_index [[thread_position_in_grid]])
 
 INSTANTIATE_UPSAMPLE_BICUBIC(float);
 )UPSAMPLE_METAL");
+
+// see NOTE [ Nearest neighbor upsampling kernel implementation ]
+template <typename accscalar_t>
+static accscalar_t compute_scales_value_backwards(const std::optional<double> scale,
+                                                  int64_t src_size,
+                                                  int64_t dst_size) {
+  // FIXME: remove magic > 0 after we ensure no models were serialized with -1 defaults.
+  return (scale.value_or(0.) > 0.) ? (accscalar_t)scale.value() : (accscalar_t)src_size / dst_size;
+}
+
+template <typename accscalar_t>
+static accscalar_t area_pixel_compute_scale(int input_size,
+                                            int output_size,
+                                            bool align_corners,
+                                            const std::optional<double> scale) {
+  if (align_corners) {
+    if (output_size > 1) {
+      return (accscalar_t)(input_size - 1) / (output_size - 1);
+    } else {
+      return static_cast<accscalar_t>(0);
+    }
+  } else {
+    return compute_scales_value<accscalar_t>(scale, input_size, output_size);
+  }
+}
+
 static void upsample_bicubic_out_template(const Tensor& input,
                                           IntArrayRef output_size,
                                           bool align_corners,
@@ -388,6 +414,9 @@ static void upsample_bicubic_out_template(const Tensor& input,
   if (input.numel() == 0) {
     return;
   }
+  std::array<float, 2> scales = {
+      area_pixel_compute_scale<float>(input.size(3), output.size(3), align_corners, scale_w_opt),
+      area_pixel_compute_scale<float>(input.size(2), output.size(2), align_corners, scale_h_opt)};
   auto upsamplePSO = lib.getPipelineStateForFunc("upsample_bicubic2d_" + mps::scalarToMetalTypeString(input));
   auto stream = getCurrentMPSStream();
   dispatch_sync_with_rethrow(stream->queue(), ^() {
@@ -404,7 +433,8 @@ static void upsample_bicubic_out_template(const Tensor& input,
       mtl_setBytes(computeEncoder, output_strides, 3);
       mtl_setBytes(computeEncoder, input_sizes, 4);
       mtl_setBytes(computeEncoder, output_sizes, 5);
-      mtl_setBytes(computeEncoder, align_corners, 6);
+      mtl_setBytes(computeEncoder, scales, 6);
+      mtl_setBytes(computeEncoder, align_corners, 7);
       mtl_dispatch1DJob(computeEncoder, upsamplePSO, output_size[0] * output_size[1]);
     }
   });
