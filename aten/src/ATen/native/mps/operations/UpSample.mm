@@ -378,6 +378,10 @@ kernel void upsample_bicubic2d(
       uint thread_index [[thread_position_in_grid]])
 
 INSTANTIATE_UPSAMPLE_BICUBIC(float);
+INSTANTIATE_UPSAMPLE_BICUBIC(half);
+#if __METAL_VERSION__ >= 310
+INSTANTIATE_UPSAMPLE_BICUBIC(bfloat);
+#endif
 )UPSAMPLE_METAL");
 
 // see NOTE [ Nearest neighbor upsampling kernel implementation ]
