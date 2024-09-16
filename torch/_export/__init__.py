@@ -70,6 +70,17 @@ def capture_pre_autograd_graph_warning():
         log.warning("For unittest, capture_pre_autograd_graph() will fallback to torch.export.export_for_training.")  # noqa: B950
 
 
+def gm_using_training_ir(graph_module):
+    using_training_ir = False
+    for node in graph_module.graph.nodes:
+        if (
+            node.op == "call_function"
+            and node.target == torch.ops.aten.batch_norm.default
+        ):
+            using_training_ir = True
+            break
+    return using_training_ir
+
 @compatibility(is_backward_compatible=False)
 def capture_pre_autograd_graph(
     f: torch.nn.Module,
