@@ -221,27 +221,20 @@ static MetalShaderLibrary lib(R"UPSAMPLE_METAL(
 #include <metal_stdlib>
 using namespace metal;
 
-
 // Based on
 // https://en.wikipedia.org/wiki/Bicubic_interpolation#Bicubic_convolution_algorithm
 template <typename accscalar_t>
-accscalar_t cubic_convolution1(
-    accscalar_t x,
-    accscalar_t A) {
+accscalar_t cubic_convolution1(accscalar_t x, accscalar_t A) {
   return ((A + 2) * x - (A + 3)) * x * x + 1;
 }
 
 template <typename accscalar_t>
-accscalar_t cubic_convolution2(
-    accscalar_t x,
-    accscalar_t A) {
+accscalar_t cubic_convolution2(accscalar_t x, accscalar_t A) {
   return ((A * x - 5 * A) * x + 8 * A) * x - 4 * A;
 }
 
 template <typename accscalar_t>
-void get_cubic_upsampling_coefficients(
-    accscalar_t coeffs[4],
-    accscalar_t t) {
+void get_cubic_upsampling_coefficients(accscalar_t coeffs[4], accscalar_t t) {
   accscalar_t A = -0.75;
 
   accscalar_t x1 = t;
@@ -287,29 +280,32 @@ accscalar_t area_pixel_compute_source_index(
 
 template <typename scalar_t>
 scalar_t upsample_get_value_bounded(
-    constant scalar_t *data,
+    constant scalar_t* data,
     long2 dim,
-    ulong2 strides,
-    long y, long x) {
+    ulong4 strides,
+    long n,
+    long c,
+    long y,
+    long x) {
   int access_y = max(min(y, dim.y - 1), 0L);
   int access_x = max(min(x, dim.x - 1), 0L);
-  return data[access_y * strides.y + access_x * strides.x];
+  return data[n * strides.w + c * strides.z + access_y * strides.y + access_x * strides.x];
 }
 
-template<typename T>
+template <typename T>
 kernel void upsample_bicubic2d(
-    constant T               * inputData       [[buffer(0)]],
-    device   T               * outputData      [[buffer(1)]],
-    constant ulong4          & input_strides   [[buffer(2)]],
-    constant ulong4          & output_strides  [[buffer(3)]],
-    constant long4           & input_sizes     [[buffer(4)]],
-    constant long4           & output_sizes    [[buffer(5)]],
-    uint3                      thread_index    [[thread_position_in_grid]]) {
-    bool align_corners = false;
-    float width_scale = input_sizes.x * 1.0 / output_sizes.x;
-    float height_scale = input_sizes.y * 1.0 / output_sizes.y;
-    auto output_x = thread_index.x;
-    auto output_y = thread_index.y;
+    constant T* inputData [[buffer(0)]],
+    device T* outputData [[buffer(1)]],
+    constant ulong4& input_strides [[buffer(2)]],
+    constant ulong4& output_strides [[buffer(3)]],
+    constant long4& input_sizes [[buffer(4)]],
+    constant long4& output_sizes [[buffer(5)]],
+    constant bool& align_corners [[buffer(6)]],
+    uint thread_index [[thread_position_in_grid]]) {
+  float width_scale = input_sizes.x * 1.0 / output_sizes.x;
+  float height_scale = input_sizes.y * 1.0 / output_sizes.y;
+  auto output_x = thread_index % output_sizes.x;
+  auto output_y = thread_index / output_sizes.x;
   auto real_x = area_pixel_compute_source_index(
       width_scale, output_x, align_corners, /*cubic=*/true);
   int in_x = floor(real_x);
@@ -319,17 +315,43 @@ kernel void upsample_bicubic2d(
       height_scale, output_y, align_corners, /*cubic=*/true);
   int in_y = floor(real_y);
   auto t_y = real_y - in_y;
-  float coefficients[4];
+  for (int n = 0; n < input_sizes.w; n++) {
+    for (int c = 0; n < input_sizes.z; c++) {
+      float coefficients[4];
       for (int k = 0; k < 4; k++) {
         coefficients[k] = cubic_interp1d(
             upsample_get_value_bounded<T>(
-                inputData, input_sizes.xy, input_strides.xy, in_y - 1 + k, in_x - 1),
+                inputData,
+                input_sizes.xy,
+                input_strides,
+                n,
+                c,
+                in_y - 1 + k,
+                in_x - 1),
             upsample_get_value_bounded<T>(
-                inputData, input_sizes.xy, input_strides.xy, in_y - 1 + k, in_x + 0),
+                inputData,
+                input_sizes.xy,
+                input_strides,
+                n,
+                c,
+                in_y - 1 + k,
+                in_x + 0),
             upsample_get_value_bounded<T>(
-                inputData, input_sizes.xy, input_strides.xy, in_y - 1 + k, in_x + 1),
+                inputData,
+                input_sizes.xy,
+                input_strides,
+                n,
+                c,
+                in_y - 1 + k,
+                in_x + 1),
             upsample_get_value_bounded<T>(
-                inputData, input_sizes.xy, input_strides.xy, in_y - 1 + k, in_x + 2),
+                inputData,
+                input_sizes.xy,
+                input_strides,
+                n,
+                c,
+                in_y - 1 + k,
+                in_x + 2),
             t_x);
       }
       auto inp = static_cast<T>(cubic_interp1d(
@@ -338,20 +360,23 @@ kernel void upsample_bicubic2d(
           coefficients[2],
           coefficients[3],
           t_y));
-    outputData[output_x * output_strides.x + output_y * output_strides.y ] = inp;
+      outputData
+          [n * output_strides.w + c * output_strides.z +
+           output_x * output_strides.x + output_y * output_strides.y] = inp;
+    }
+  }
 }
-#define INSTANTIATE_UPSAMPLE_BICUBIC(DTYPE)                                          \
-template                                                                   \
-[[host_name("upsample_bicubic2d_" #DTYPE)]]                                            \
-kernel void upsample_bicubic2d<DTYPE>(                                                 \
-    constant DTYPE           * inputData       [[buffer(0)]],              \
-    device   DTYPE           * outputData      [[buffer(1)]],              \
-    constant ulong4          & input_strides   [[buffer(2)]],              \
-    constant ulong4          & output_strides  [[buffer(3)]],              \
-    constant long4           & input_sizes     [[buffer(4)]],              \
-    constant long4           & output_sizes    [[buffer(5)]],              \
-    uint3                      thread_index  [[thread_position_in_grid]])
-
+#define INSTANTIATE_UPSAMPLE_BICUBIC(DTYPE)                        \
+  template [[host_name("upsample_bicubic2d_" #DTYPE)]] kernel void \
+  upsample_bicubic2d<DTYPE>(                                       \
+      constant DTYPE * inputData [[buffer(0)]],                    \
+      device DTYPE * outputData [[buffer(1)]],                     \
+      constant ulong4 & input_strides [[buffer(2)]],               \
+      constant ulong4 & output_strides [[buffer(3)]],              \
+      constant long4 & input_sizes [[buffer(4)]],                  \
+      constant long4 & output_sizes [[buffer(5)]],                 \
+      constant bool& align_corners [[buffer(6)]],                  \
+      uint thread_index [[thread_position_in_grid]])
 
 INSTANTIATE_UPSAMPLE_BICUBIC(float);
 )UPSAMPLE_METAL");
@@ -380,8 +405,8 @@ static void upsample_bicubic_out_template(const Tensor& input,
       mtl_setBytes(computeEncoder, output_strides, 3);
       mtl_setBytes(computeEncoder, input_sizes, 4);
       mtl_setBytes(computeEncoder, output_sizes, 5);
-      [computeEncoder dispatchThreads:MTLSizeMake(output_size[0], output_size[1], 1)
-                threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+      mtl_setBytes(computeEncoder, align_corners, 6);
+      mtl_dispatch1DJob(computeEncoder, upsamplePSO, output_size[0] * output_size[1]);
     }
   });
 }
