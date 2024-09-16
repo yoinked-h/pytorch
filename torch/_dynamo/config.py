@@ -381,6 +381,9 @@ inline_inbuilt_nn_modules = not is_fbcode()
 # torch._dynamo.utilsCompileTimeInstructionCounter.
 record_compile_time_instruction_count = False
 
+# Number of eager warmup runs to run before compiling.
+warmup_runs = 0
+
 
 def default_debug_dir_root():
     # [@compile_ignored: debug]
