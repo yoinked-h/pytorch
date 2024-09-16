@@ -356,11 +356,11 @@ kernel void upsample_bicubic2d<DTYPE>(                                          
 INSTANTIATE_UPSAMPLE_BICUBIC(float);
 )UPSAMPLE_METAL");
 static void upsample_bicubic_out_template(const Tensor& input,
-                                  IntArrayRef output_size,
-                                  bool align_corners,
-                                  std::optional<double> scale_h_opt,
-                                  std::optional<double> scale_w_opt,
-                                  const Tensor& output) {
+                                          IntArrayRef output_size,
+                                          bool align_corners,
+                                          std::optional<double> scale_h_opt,
+                                          std::optional<double> scale_w_opt,
+                                          const Tensor& output) {
   if (input.numel() == 0) {
     return;
   }
@@ -368,10 +368,10 @@ static void upsample_bicubic_out_template(const Tensor& input,
   auto stream = getCurrentMPSStream();
   dispatch_sync_with_rethrow(stream->queue(), ^() {
     @autoreleasepool {
-      std::array<int64_t, 4> output_strides = {output.stride(3), output.stride(2), output.stride(1), output.stride(0) };
-      std::array<int64_t, 4> output_sizes = {output.size(3), output.size(2), output.size(1), output.size(0) };
-      std::array<int64_t, 4> input_sizes = {input.size(3), input.size(2), input.size(1), input.size(0) };
-      std::array<int64_t, 4> input_strides = {input.stride(3), input.stride(2), input.stride(1), input.stride(0) };
+      std::array<int64_t, 4> output_strides = {output.stride(3), output.stride(2), output.stride(1), output.stride(0)};
+      std::array<int64_t, 4> output_sizes = {output.size(3), output.size(2), output.size(1), output.size(0)};
+      std::array<int64_t, 4> input_sizes = {input.size(3), input.size(2), input.size(1), input.size(0)};
+      std::array<int64_t, 4> input_strides = {input.stride(3), input.stride(2), input.stride(1), input.stride(0)};
       auto computeEncoder = stream->commandEncoder();
       [computeEncoder setComputePipelineState:upsamplePSO];
       mtl_setBuffer(computeEncoder, input, 0);
