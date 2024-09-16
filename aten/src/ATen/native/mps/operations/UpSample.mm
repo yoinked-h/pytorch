@@ -315,8 +315,8 @@ kernel void upsample_bicubic2d(
       height_scale, output_y, align_corners, /*cubic=*/true);
   int in_y = floor(real_y);
   auto t_y = real_y - in_y;
-  for (int n = 0; n < input_sizes.w; n++) {
-    for (int c = 0; n < input_sizes.z; c++) {
+  for (int n = 0; n < output_sizes.w; n++) {
+    for (int c = 0; c < output_sizes.z; c++) {
       float coefficients[4];
       for (int k = 0; k < 4; k++) {
         coefficients[k] = cubic_interp1d(
@@ -361,8 +361,7 @@ kernel void upsample_bicubic2d(
           coefficients[3],
           t_y));
       outputData
-          [n * output_strides.w + c * output_strides.z +
-           output_x * output_strides.x + output_y * output_strides.y] = inp;
+          [ n * output_strides.w + c * output_strides.z + output_x * output_strides.x + output_y * output_strides.y] = inp;
     }
   }
 }
