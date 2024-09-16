@@ -13,7 +13,9 @@
 #include <ATen/NativeFunctions.h>
 #else
 // needed for the meta tensor calls to get stride info in functionalization
+#include <ATen/ops/empty_native.h>
 #include <ATen/ops/empty_strided_native.h>
+#include <ATen/ops/as_strided_native.h>
 // needed for special handling of copy_().
 // See Note [functionalizating copy_() and not preserving strides]
 #include <ATen/ops/to_ops.h>
@@ -54,10 +56,38 @@ inline bool has_internal_overlap_helper(const at::Tensor t) {
 
 
 inline Tensor to_meta(const Tensor& t) {
-    if (!t.defined()) return t;
-    return at::native::empty_strided_meta_symint(t.sym_sizes(), t.sym_strides(),
-/*dtype=*/std::make_optional(t.scalar_type()), /*layout=*/std::make_optional(t.layout()),
-/*device=*/std::make_optional(c10::Device(kMeta)), /*pin_memory=*/std::nullopt);
+  if (!t.defined()) return t;
+
+  // Fast path: storage offset is 0.
+  if (TORCH_GUARD_SIZE_OBLIVIOUS(t.sym_storage_offset().sym_eq(0))) {
+    return at::native::empty_strided_meta_symint(
+        t.sym_sizes(),
+        t.sym_strides(),
+        /*dtype=*/std::make_optional(t.scalar_type()),
+        /*layout=*/std::make_optional(t.layout()),
+        /*device=*/std::make_optional(c10::Device(kMeta)),
+        /*pin_memory=*/std::nullopt);
+  }
+
+  // Otherwise, we need to first create the base tensor, holding
+  // the necessary storage. Then, stride and offset it accordingly.
+  auto bytes = at::detail::computeStorageNbytes(
+      t.sym_sizes(),
+      t.sym_strides(),
+      t.dtype().itemsize(),
+      t.sym_storage_offset());
+  auto numel = bytes / t.dtype().itemsize();
+  auto base = at::native::empty_meta_symint(
+      {numel},
+      /*dtype=*/std::make_optional(t.scalar_type()),
+      /*layout=*/std::make_optional(t.layout()),
+      /*device=*/std::make_optional(c10::Device(kMeta)),
+      /*pin_memory=*/std::nullopt);
+  return at::native::as_strided_tensorimpl_meta_symint(
+      base,
+      t.sym_sizes(),
+      t.sym_strides(),
+      t.sym_storage_offset());
 }
 
 inline std::optional<Tensor> to_meta(const std::optional<Tensor>& t) {
